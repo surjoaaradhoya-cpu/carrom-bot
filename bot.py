@@ -51,19 +51,13 @@ def init_db():
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS keys (
+        CREATE TABLE IF NOT EXISTS pending_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
             product TEXT NOT NULL,
             duration TEXT NOT NULL,
-            key_code TEXT UNIQUE NOT NULL,
-            is_used INTEGER DEFAULT 0
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            trxid TEXT UNIQUE NOT NULL,
-            user_id INTEGER NOT NULL
+            trxid TEXT NOT NULL,
+            status TEXT DEFAULT 'PENDING'
         )
     """)
     conn.commit()
@@ -94,6 +88,9 @@ class PurchaseStates(StatesGroup):
     selecting_duration = State()
     awaiting_trxid = State()
 
+class AdminStates(StatesGroup):
+    awaiting_key_input = State()
+
 def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -104,7 +101,6 @@ def main_keyboard():
     )
 
 async def clear_previous_messages(message: types.Message, state: FSMContext):
-    """ইউজারের টেক্সট মেসেজ এবং বটের আগের ইনলাইন মেসেজ ক্লিন করার হেল্পার"""
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -216,47 +212,96 @@ async def process_trxid(message: types.Message, state: FSMContext):
     trxid = message.text.strip()
     data = await state.get_data()
     product = data["product"]
+    days = data["days"]
+    price = data["price"]
     
     await clear_previous_messages(message, state)
-            
+    
+    # Save order to DB
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT id FROM transactions WHERE trxid = ?", (trxid,))
-    if cursor.fetchone():
-        conn.close()
-        sent_msg = await message.answer("❌ এই TrxID টি আগে ব্যবহার করা হয়েছে!")
-        await state.update_data(last_msg_id=sent_msg.message_id)
-        return
-        
-    cursor.execute("SELECT id, key_code FROM keys WHERE product = ? AND duration = ? AND is_used = 0 LIMIT 1", (product, data["days"]))
-    key_row = cursor.fetchone()
-    
-    if not key_row:
-        conn.close()
-        sent_msg = await message.answer("⚠️ দুঃখিত, এই প্যাকেজের পর্যাপ্ত কি (Key) স্টক নেই। এডমিনের সাথে যোগাযোগ করুন।")
-        await state.update_data(last_msg_id=sent_msg.message_id)
-        return
-        
-    key_id, key_code = key_row
-    cursor.execute("UPDATE keys SET is_used = 1 WHERE id = ?", (key_id,))
-    cursor.execute("INSERT INTO transactions (trxid, user_id) VALUES (?, ?)", (trxid, message.from_user.id))
+    cursor.execute(
+        "INSERT INTO pending_orders (user_id, product, duration, trxid) VALUES (?, ?, ?, ?)",
+        (message.from_user.id, product, days, trxid)
+    )
+    order_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
-    sent_msg = await message.answer(f"✅ পেমেন্ট সফল হয়েছে!\n\nআপনার কি (Key):\n`{key_code}`", parse_mode="Markdown")
-    await state.update_data(last_msg_id=sent_msg.message_id)
-    
-    # Notify Admin
-    admin_msg = (
-        f"🔔 **New Purchase Alert!**\n\n"
-        f"User: @{message.from_user.username or message.from_user.id}\n"
-        f"Product: {product.upper()}\n"
-        f"Duration: {data['days']} Day(s)\n"
-        f"Amount: {data['price']} BDT\n"
-        f"TrxID: `{trxid}`"
+
+    # Inform customer
+    wait_msg = (
+        f"⏳ **পেমেন্ট ভেরিফিকেশন চলছে...**\n\n"
+        f"আপনার TrxID: `{trxid}` গ্রহণ করা হয়েছে।\n"
+        f"এডমিন আপনার পেমেন্ট ভেরিফাই করে কিছুক্ষণের মধ্যেই **Key** পাঠিয়ে দিচ্ছে। অনুগ্রহ করে একটু অপেক্ষা করুন।"
     )
-    await bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="Markdown")
+    sent_msg = await message.answer(wait_msg, parse_mode="Markdown")
+    await state.update_data(last_msg_id=sent_msg.message_id)
+    await state.clear()
+    
+    # Notify Admin with Action Button
+    admin_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Send Key Now", callback_data=f"sendkey_{order_id}")]
+    ])
+    admin_msg = (
+        f"🔔 **New Order Received!**\n\n"
+        f"Order ID: #{order_id}\n"
+        f"User: @{message.from_user.username or message.from_user.id} (ID: `{message.from_user.id}`)\n"
+        f"Product: {PRODUCTS[product]['name']}\n"
+        f"Duration: {days} Day(s)\n"
+        f"Amount: {price} BDT\n"
+        f"TrxID: `{trxid}`\n\n"
+        f"ক্লিক করে কাস্টমারকে Key পাঠান 👇"
+    )
+    await bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=admin_markup, parse_mode="Markdown")
+
+# --- Admin Key Delivery Logic ---
+@dp.callback_query(F.data.startswith("sendkey_"))
+async def admin_prompt_key(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+        
+    order_id = callback.data.split("_")[1]
+    await state.update_data(delivering_order_id=order_id)
+    await state.set_state(AdminStates.awaiting_key_input)
+    
+    await callback.message.reply(f"🔑 Order #{order_id} এর জন্য **Key** টি টেক্সট করে পাঠান:")
+
+@dp.message(AdminStates.awaiting_key_input)
+async def admin_process_key(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+        
+    key_code = message.text.strip()
+    data = await state.get_data()
+    order_id = data.get("delivering_order_id")
+    
+    conn = sqlite3.connect("shop_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, product, duration FROM pending_orders WHERE id = ?", (order_id,))
+    order = cursor.fetchone()
+    
+    if order:
+        user_id, product, duration = order
+        cursor.execute("UPDATE pending_orders SET status = 'COMPLETED' WHERE id = ?", (order_id,))
+        conn.commit()
+        conn.close()
+        
+        # Deliver Key to Customer via Bot
+        customer_delivery_msg = (
+            f"✅ **আপনার পেমেন্ট সফলভাবে ভেরিফাই করা হয়েছে!**\n\n"
+            f"পণ্য: {PRODUCTS[product]['name']} ({duration} Days)\n\n"
+            f"আপনার অ্যাক্টিভেশন কি (Key):\n`{key_code}`\n\n"
+            f"ধন্যবাদ আমাদের সাথে থাকার জন্য! 😇"
+        )
+        try:
+            await bot.send_message(chat_id=user_id, text=customer_delivery_msg, parse_mode="Markdown")
+            await message.reply(f"✅ Order #{order_id} এর কাস্টমারকে সফলভাবে Key ডেলিভারি করা হয়েছে!")
+        except Exception as e:
+            await message.reply(f"❌ কাস্টমারকে মেসেজ পাঠাতে সমস্যা হয়েছে: {e}")
+    else:
+        conn.close()
+        await message.reply("❌ অর্ডারটি পাওয়া যায়নি।")
+        
     await state.clear()
 
 # --- Main Runner ---
