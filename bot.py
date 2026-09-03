@@ -103,33 +103,44 @@ def main_keyboard():
         resize_keyboard=True
     )
 
-async def safe_delete(message: types.Message):
-    """ইউজারের আগের মেসেজ ডিলিট করার হেল্পার ফাংশন"""
+async def clear_previous_messages(message: types.Message, state: FSMContext):
+    """ইউজারের টেক্সট মেসেজ এবং বটের আগের ইনলাইন মেসেজ ক্লিন করার হেল্পার"""
     try:
         await message.delete()
     except TelegramBadRequest:
         pass
 
-@dp.message(Command("start"))
-async def start_cmd(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("স্বাগতম! আপনার প্রয়োজনীয় সার্ভিস টি সিলেক্ট করুন:", reply_markup=main_keyboard())
-
-@dp.message(F.text == "📞 Support / Admin")
-async def support_cmd(message: types.Message):
-    await message.answer(f"যেকোনো প্রয়োজনে যোগাযোগ করুন: {ADMIN_USERNAME}")
-
-@dp.message(F.text.in_(["🟢 Buy Kos Engine", "🎯 Buy Aim Ai"]))
-async def select_product(message: types.Message, state: FSMContext):
-    # পুরোনো প্রসেসের মেসেজ আইডি থাকলে ডিলিট করবে
     data = await state.get_data()
     if "last_msg_id" in data:
         try:
             await bot.delete_message(chat_id=message.chat.id, message_id=data["last_msg_id"])
         except TelegramBadRequest:
             pass
-            
-    await safe_delete(message)  # ইউজারের পাঠানো বাটন ক্লিক মেসেজটি ডিলিট করবে
+
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message, state: FSMContext):
+    await clear_previous_messages(message, state)
+    await state.clear()
+    sent_msg = await message.answer("স্বাগতম! আপনার প্রয়োজনীয় সার্ভিস টি সিলেক্ট করুন:", reply_markup=main_keyboard())
+    await state.update_data(last_msg_id=sent_msg.message_id)
+
+@dp.message(F.text == "📞 Support / Admin")
+async def support_cmd(message: types.Message, state: FSMContext):
+    await clear_previous_messages(message, state)
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Back to Main Menu", callback_data="nav_main")]
+    ])
+    
+    sent_msg = await message.answer(
+        f"যেকোনো প্রয়োজনে যোগাযোগ করুন: {ADMIN_USERNAME}",
+        reply_markup=markup
+    )
+    await state.update_data(last_msg_id=sent_msg.message_id)
+
+@dp.message(F.text.in_(["🟢 Buy Kos Engine", "🎯 Buy Aim Ai"]))
+async def select_product(message: types.Message, state: FSMContext):
+    await clear_previous_messages(message, state)
 
     product_key = "kos_engine" if "Kos Engine" in message.text else "aim_ai"
     product_data = PRODUCTS[product_key]
@@ -139,13 +150,24 @@ async def select_product(message: types.Message, state: FSMContext):
     buttons = []
     for duration, price in product_data["prices"].items():
         buttons.append([InlineKeyboardButton(text=f"{duration} Day(s) - {price} BDT", callback_data=f"dur_{duration}")])
+    
+    buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data="nav_main")])
         
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     sent_msg = await message.answer(f"**{product_data['name']}** এর মেয়াদ নির্বাচন করুন:", reply_markup=markup, parse_mode="Markdown")
     
-    # নতুন মেসেজের আইডি সেভ রাখা হলো ডিলিট করার জন্য
     await state.update_data(last_msg_id=sent_msg.message_id)
     await state.set_state(PurchaseStates.selecting_duration)
+
+@dp.callback_query(F.data == "nav_main")
+async def back_to_main(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+    sent_msg = await callback.message.answer("স্বাগতম! আপনার প্রয়োজনীয় সার্ভিস টি সিলেক্ট করুন:", reply_markup=main_keyboard())
+    await state.update_data(last_msg_id=sent_msg.message_id)
 
 @dp.callback_query(PurchaseStates.selecting_duration, F.data.startswith("dur_"))
 async def select_duration(callback: types.CallbackQuery, state: FSMContext):
@@ -166,9 +188,28 @@ async def select_duration(callback: types.CallbackQuery, state: FSMContext):
         f"উপরে দেওয়া নম্বরে {price} টাকা Send Money করার পর নিচে **TrxID** টি টেক্সট করে পাঠান:"
     )
     
-    # ইনলাইন কিবোর্ড মেসেজটিকে সরাসরি এডিট করে পেমেন্ট ডিটেইলস বানিয়ে দেবে
-    await callback.message.edit_text(msg, parse_mode="Markdown")
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Back", callback_data="nav_back_duration")]
+    ])
+    
+    await callback.message.edit_text(msg, reply_markup=markup, parse_mode="Markdown")
     await state.set_state(PurchaseStates.awaiting_trxid)
+
+@dp.callback_query(PurchaseStates.awaiting_trxid, F.data == "nav_back_duration")
+async def back_to_duration(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    product_key = data.get("product", "kos_engine")
+    product_data = PRODUCTS[product_key]
+    
+    buttons = []
+    for duration, price in product_data["prices"].items():
+        buttons.append([InlineKeyboardButton(text=f"{duration} Day(s) - {price} BDT", callback_data=f"dur_{duration}")])
+    
+    buttons.append([InlineKeyboardButton(text="🔙 Back", callback_data="nav_main")])
+        
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text(f"**{product_data['name']}** এর মেয়াদ নির্বাচন করুন:", reply_markup=markup, parse_mode="Markdown")
+    await state.set_state(PurchaseStates.selecting_duration)
 
 @dp.message(PurchaseStates.awaiting_trxid)
 async def process_trxid(message: types.Message, state: FSMContext):
@@ -176,12 +217,7 @@ async def process_trxid(message: types.Message, state: FSMContext):
     data = await state.get_data()
     product = data["product"]
     
-    # ইউজারের পেমেন্ট মেসেজ ও বটের আগের পেমেন্ট ইনফো মেসেজ ডিলিট করা
-    if "last_msg_id" in data:
-        try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=data["last_msg_id"])
-        except TelegramBadRequest:
-            pass
+    await clear_previous_messages(message, state)
             
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
@@ -189,7 +225,8 @@ async def process_trxid(message: types.Message, state: FSMContext):
     cursor.execute("SELECT id FROM transactions WHERE trxid = ?", (trxid,))
     if cursor.fetchone():
         conn.close()
-        await message.answer("❌ এই TrxID টি আগে ব্যবহার করা হয়েছে!")
+        sent_msg = await message.answer("❌ এই TrxID টি আগে ব্যবহার করা হয়েছে!")
+        await state.update_data(last_msg_id=sent_msg.message_id)
         return
         
     cursor.execute("SELECT id, key_code FROM keys WHERE product = ? AND duration = ? AND is_used = 0 LIMIT 1", (product, data["days"]))
@@ -197,7 +234,8 @@ async def process_trxid(message: types.Message, state: FSMContext):
     
     if not key_row:
         conn.close()
-        await message.answer("⚠️ দুঃখিত, এই প্যাকেজের পর্যাপ্ত কি (Key) স্টক নেই। এডমিনের সাথে যোগাযোগ করুন।")
+        sent_msg = await message.answer("⚠️ দুঃখিত, এই প্যাকেজের পর্যাপ্ত কি (Key) স্টক নেই। এডমিনের সাথে যোগাযোগ করুন।")
+        await state.update_data(last_msg_id=sent_msg.message_id)
         return
         
     key_id, key_code = key_row
@@ -206,7 +244,8 @@ async def process_trxid(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
     
-    await message.answer(f"✅ পেমেন্ট সফল হয়েছে!\n\nআপনার কি (Key):\n`{key_code}`", parse_mode="Markdown")
+    sent_msg = await message.answer(f"✅ পেমেন্ট সফল হয়েছে!\n\nআপনার কি (Key):\n`{key_code}`", parse_mode="Markdown")
+    await state.update_data(last_msg_id=sent_msg.message_id)
     
     # Notify Admin
     admin_msg = (
