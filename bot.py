@@ -22,7 +22,7 @@ ADMIN_ID = 8122859840
 ADMIN_USERNAME = "@SHURJO_0"
 NAGAD_NUMBER = "01672630670"
 
-# Updated Product Prices Setup (in BDT)
+# Product Prices Setup (in BDT)
 PRODUCTS = {
     "kos_engine": {
         "name": "Kos Engine",
@@ -303,6 +303,34 @@ async def admin_process_key(message: types.Message, state: FSMContext):
         await message.reply("❌ অর্ডারটি পাওয়া যায়নি।")
         
     await state.clear()
+
+# --- Broadcast Feature for Admin ---
+@dp.message(Command("broadcast"))
+async def broadcast_msg(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+        
+    text_to_send = message.text.replace("/broadcast", "").strip()
+    if not text_to_send:
+        await message.reply("⚠️ মেসেজ লিখুন! উদাহরণ:\n`/broadcast আজ রাতে বিশেষ ছাড় চলছে!`", parse_mode="Markdown")
+        return
+
+    conn = sqlite3.connect("shop_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT user_id FROM pending_orders")
+    users = cursor.fetchall()
+    conn.close()
+
+    count = 0
+    for user in users:
+        try:
+            await bot.send_message(chat_id=user[0], text=text_to_send, parse_mode="Markdown")
+            count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    await message.reply(f"📢 মোট {count} জন ইউজারের কাছে নোটিশ পাঠানো হয়েছে!")
 
 # --- Main Runner ---
 async def main():
