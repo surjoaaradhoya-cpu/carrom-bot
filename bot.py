@@ -50,6 +50,13 @@ PRODUCTS = {
 def init_db():
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
+    # ইউজার টেবিল (যারা বট স্টার্ট করবে)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    # অর্ডারের টেবিল
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +122,13 @@ async def clear_previous_messages(message: types.Message, state: FSMContext):
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
+    # ইউজার স্টার্ট করলেই ডাটাবেজে সেভ করে রাখবে
+    conn = sqlite3.connect("shop_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
+    conn.commit()
+    conn.close()
+
     await clear_previous_messages(message, state)
     await state.clear()
     sent_msg = await message.answer("স্বাগতম! আপনার প্রয়োজনীয় সার্ভিস টি সিলেক্ট করুন:", reply_markup=main_keyboard())
@@ -304,7 +318,7 @@ async def admin_process_key(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-# --- Broadcast Feature for Admin ---
+# --- Broadcast Feature for Admin (Updated to use 'users' table) ---
 @dp.message(Command("broadcast"))
 async def broadcast_msg(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -317,7 +331,7 @@ async def broadcast_msg(message: types.Message):
 
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT user_id FROM pending_orders")
+    cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
     conn.close()
 
