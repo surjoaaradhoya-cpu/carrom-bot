@@ -103,6 +103,13 @@ def main_keyboard():
         resize_keyboard=True
     )
 
+async def safe_delete(message: types.Message):
+    """ইউজারের আগের মেসেজ ডিলিট করার হেল্পার ফাংশন"""
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
     await state.clear()
@@ -114,6 +121,16 @@ async def support_cmd(message: types.Message):
 
 @dp.message(F.text.in_(["🟢 Buy Kos Engine", "🎯 Buy Aim Ai"]))
 async def select_product(message: types.Message, state: FSMContext):
+    # পুরোনো প্রসেসের মেসেজ আইডি থাকলে ডিলিট করবে
+    data = await state.get_data()
+    if "last_msg_id" in data:
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=data["last_msg_id"])
+        except TelegramBadRequest:
+            pass
+            
+    await safe_delete(message)  # ইউজারের পাঠানো বাটন ক্লিক মেসেজটি ডিলিট করবে
+
     product_key = "kos_engine" if "Kos Engine" in message.text else "aim_ai"
     product_data = PRODUCTS[product_key]
     
@@ -124,7 +141,10 @@ async def select_product(message: types.Message, state: FSMContext):
         buttons.append([InlineKeyboardButton(text=f"{duration} Day(s) - {price} BDT", callback_data=f"dur_{duration}")])
         
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(f"**{product_data['name']}** এর মেয়াদ নির্বাচন করুন:", reply_markup=markup, parse_mode="Markdown")
+    sent_msg = await message.answer(f"**{product_data['name']}** এর মেয়াদ নির্বাচন করুন:", reply_markup=markup, parse_mode="Markdown")
+    
+    # নতুন মেসেজের আইডি সেভ রাখা হলো ডিলিট করার জন্য
+    await state.update_data(last_msg_id=sent_msg.message_id)
     await state.set_state(PurchaseStates.selecting_duration)
 
 @dp.callback_query(PurchaseStates.selecting_duration, F.data.startswith("dur_"))
@@ -146,6 +166,7 @@ async def select_duration(callback: types.CallbackQuery, state: FSMContext):
         f"উপরে দেওয়া নম্বরে {price} টাকা Send Money করার পর নিচে **TrxID** টি টেক্সট করে পাঠান:"
     )
     
+    # ইনলাইন কিবোর্ড মেসেজটিকে সরাসরি এডিট করে পেমেন্ট ডিটেইলস বানিয়ে দেবে
     await callback.message.edit_text(msg, parse_mode="Markdown")
     await state.set_state(PurchaseStates.awaiting_trxid)
 
@@ -155,6 +176,13 @@ async def process_trxid(message: types.Message, state: FSMContext):
     data = await state.get_data()
     product = data["product"]
     
+    # ইউজারের পেমেন্ট মেসেজ ও বটের আগের পেমেন্ট ইনফো মেসেজ ডিলিট করা
+    if "last_msg_id" in data:
+        try:
+            await bot.delete_message(chat_id=message.chat.id, message_id=data["last_msg_id"])
+        except TelegramBadRequest:
+            pass
+            
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
     
@@ -169,7 +197,7 @@ async def process_trxid(message: types.Message, state: FSMContext):
     
     if not key_row:
         conn.close()
-        await message.answer("⚠️ দুখেত, এই প্যাকেজের পর্যাপ্ত কি (Key) স্টক নেই। এডমিনের সাথে যোগাযোগ করুন।")
+        await message.answer("⚠️ দুঃখিত, এই প্যাকেজের পর্যাপ্ত কি (Key) স্টক নেই। এডমিনের সাথে যোগাযোগ করুন।")
         return
         
     key_id, key_code = key_row
@@ -194,10 +222,7 @@ async def process_trxid(message: types.Message, state: FSMContext):
 
 # --- Main Runner ---
 async def main():
-    # Render Keep-Alive Port Bind
     await start_server()
-    
-    # Bot Start Polling
     logging.basicConfig(level=logging.INFO)
     logging.info("Starting Telegram Bot...")
     await dp.start_polling(bot)
