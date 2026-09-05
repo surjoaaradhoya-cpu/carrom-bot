@@ -59,13 +59,11 @@ PRODUCTS = {
 def init_db():
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
-    # ইউজার টেবিল (যারা বট স্টার্ট করবে)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY
         )
     """)
-    # অর্ডারের টেবিল
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +79,7 @@ def init_db():
 
 init_db()
 
-# --- Keep-Alive Web Server for Render/Railway ---
+# --- Keep-Alive Web Server ---
 async def handle_ping(request):
     return web.Response(text="Bot is Live and running 24/7!")
 
@@ -110,7 +108,7 @@ class AdminStates(StatesGroup):
 def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🟢 Buy Kos Engine"), KeyboardButton(text="🎯 Buy Aim Ai")],
+            [KeyboardButton(text="🎱 Buy Kos Engine"), KeyboardButton(text="🎯 Buy Aim Ai")],
             [KeyboardButton(text="🐍 Buy Snake Engine"), KeyboardButton(text="📞 Support / Admin")]
         ],
         resize_keyboard=True
@@ -131,7 +129,6 @@ async def clear_previous_messages(message: types.Message, state: FSMContext):
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, state: FSMContext):
-    # ইউজার স্টার্ট করলেই ডাটাবেজে সেভ করে রাখবে
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
@@ -157,7 +154,7 @@ async def support_cmd(message: types.Message, state: FSMContext):
     )
     await state.update_data(last_msg_id=sent_msg.message_id)
 
-@dp.message(F.text.in_(["🟢 Buy Kos Engine", "🎯 Buy Aim Ai", "🐍 Buy Snake Engine"]))
+@dp.message(F.text.in_(["🎱 Buy Kos Engine", "🎯 Buy Aim Ai", "🐍 Buy Snake Engine"]))
 async def select_product(message: types.Message, state: FSMContext):
     await clear_previous_messages(message, state)
 
@@ -246,7 +243,6 @@ async def process_trxid(message: types.Message, state: FSMContext):
     
     await clear_previous_messages(message, state)
     
-    # Save order to DB
     conn = sqlite3.connect("shop_database.db")
     cursor = conn.cursor()
     cursor.execute(
@@ -257,7 +253,6 @@ async def process_trxid(message: types.Message, state: FSMContext):
     conn.commit()
     conn.close()
 
-    # Inform customer
     wait_msg = (
         f"⏳ **পেমেন্ট ভেরিফিকেশন চলছে...**\n\n"
         f"আপনার TrxID: `{trxid}` গ্রহণ করা হয়েছে।\n"
@@ -267,7 +262,6 @@ async def process_trxid(message: types.Message, state: FSMContext):
     await state.update_data(last_msg_id=sent_msg.message_id)
     await state.clear()
     
-    # Notify Admin with Action Button
     admin_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Send Key Now", callback_data=f"sendkey_{order_id}")]
     ])
@@ -283,7 +277,6 @@ async def process_trxid(message: types.Message, state: FSMContext):
     )
     await bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=admin_markup, parse_mode="Markdown")
 
-# --- Admin Key Delivery Logic ---
 @dp.callback_query(F.data.startswith("sendkey_"))
 async def admin_prompt_key(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
@@ -315,7 +308,6 @@ async def admin_process_key(message: types.Message, state: FSMContext):
         conn.commit()
         conn.close()
         
-        # Deliver Key to Customer via Bot
         customer_delivery_msg = (
             f"✅ **আপনার পেমেন্ট সফলভাবে ভেরিফাই করা হয়েছে!**\n\n"
             f"পণ্য: {PRODUCTS[product]['name']} ({duration} Days)\n\n"
@@ -333,7 +325,6 @@ async def admin_process_key(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-# --- Broadcast Feature for Admin ---
 @dp.message(Command("broadcast"))
 async def broadcast_msg(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -361,7 +352,6 @@ async def broadcast_msg(message: types.Message):
 
     await message.reply(f"📢 মোট {count} জন ইউজারের কাছে নোটিশ পাঠানো হয়েছে!")
 
-# --- Main Runner ---
 async def main():
     await start_server()
     logging.basicConfig(level=logging.INFO)
