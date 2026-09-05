@@ -108,7 +108,7 @@ class AdminStates(StatesGroup):
 def main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🎧 Buy Kos Engine"), KeyboardButton(text="🤖 Buy Aim Ai")],
+            [KeyboardButton(text="🎱 Buy Kos Engine"), KeyboardButton(text="🎯 Buy Aim Ai")],
             [KeyboardButton(text="🐍 Buy Snake Engine"), KeyboardButton(text="📞 Support / Admin")]
         ],
         resize_keyboard=True
@@ -154,7 +154,7 @@ async def support_cmd(message: types.Message, state: FSMContext):
     )
     await state.update_data(last_msg_id=sent_msg.message_id)
 
-@dp.message(F.text.in_(["🎧 Buy Kos Engine", "🤖 Buy Aim Ai", "🐍 Buy Snake Engine"]))
+@dp.message(F.text.in_(["🎱 Buy Kos Engine", "🎯 Buy Aim Ai", "🐍 Buy Snake Engine"]))
 async def select_product(message: types.Message, state: FSMContext):
     await clear_previous_messages(message, state)
 
